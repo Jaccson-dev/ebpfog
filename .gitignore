@@ -1,0 +1,19 @@
+# Compiled BPF objects
+*.o
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.ll
+*.s
+
