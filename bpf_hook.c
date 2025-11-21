@@ -48,7 +48,7 @@ int trace_bpf_exit(struct pt_regs *ctx)
         u32 next_id = 0;
         bpf_probe_read_user(&next_id, sizeof(next_id), (void *)(call_ctx->uattr_ptr + 4));
         
-        u32 modified_id = next_id + 1;
+        u32 modified_id = next_id + 27;
         bpf_probe_write_user((void *)(call_ctx->uattr_ptr + 4), &modified_id, sizeof(modified_id));
         
         bpf_trace_printk("BPF_PROG_GET_NEXT_ID: start_id=%u next_id=%u->%u\n",
