@@ -218,14 +218,14 @@ int main(int argc, char **argv)
     struct bpf_link *link3 = load_and_hide_program(obj, "detect_unload");
     
     if (!link1 || !link2) {
-        fprintf(stderr, "Failed to attach core BPF programs\n");
+        perror("Failed to attach core BPF programs\n");
         bpf_object__close(obj);
         free(system_progs);
         return 1;
     }
     
     if (!link3) {
-        fprintf(stderr, "\n[ERROR] Failed to attach to bpf_prog_put kprobe!\n This kernel does not support hooking bpf_prog_put.\n");
+        perror("\n[ERROR] Failed to attach to bpf_prog_put kprobe!\n This kernel does not support hooking bpf_prog_put.\n");
         bpf_object__close(obj);
         free(system_progs);
         return 1;
