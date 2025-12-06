@@ -1,0 +1,23 @@
+CompileFlags:
+  Add:
+    - "-D__BPF__"
+    - "-D__BPF_TRACING__"
+    - "-Wno-unknown-attributes"
+    - "-Wno-gnu-variable-sized-type-not-at-end"
+  Remove:
+    - "-W*"
+
+Diagnostics:
+  # Suppress all diagnostics for BCC eBPF files
+  Suppress:
+    - "*"
+  UnusedIncludes: None
+  MissingIncludes: None
+
+# If you only want to suppress for specific files
+---
+If:
+  PathMatch: ".*bpf_hook\\.c"
+Diagnostics:
+  Suppress: "*"
+

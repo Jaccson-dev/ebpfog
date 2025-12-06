@@ -1,17 +1,20 @@
-CLANG ?= clang
+CLANG := $(firstword $(wildcard /usr/bin/clang-18 /usr/bin/clang-17 /usr/bin/clang-16 /usr/bin/clang-15 /usr/bin/clang))
 ARCH := $(shell uname -m | sed 's/x86_64/x86/' | sed 's/aarch64/arm64/')
 
-.PHONY: all clean
+ifeq ($(CLANG),)
+$(error No clang found. Run: sudo apt install clang libbpf-dev libelf-dev)
+endif
 
-all: bpf_hook.o
+all: rootkit.bpf.o rootkit
 
-# Compile the BPF program
-bpf_hook.o: bpf_hook.c
-	$(CLANG) -O2 -g -target bpf -D__TARGET_ARCH_$(ARCH) \
-		-I/usr/include/$(shell uname -m)-linux-gnu \
-		-I/usr/src/linux-headers-$(shell uname -r)/tools/bpf/resolve_btfids/libbpf/include \
-		-c $< -o $@
+rootkit.bpf.o: rootkit.bpf.c rootkit.h vmlinux.h
+	$(CLANG) -g -O2 -target bpf -D__TARGET_ARCH_$(ARCH) -I. -c $< -o $@
+
+rootkit: rootkit.c rootkit.h
+	gcc -O2 -g -Wall -o $@ $< -lbpf -lelf -lz
+
+vmlinux.h:
+	bpftool btf dump file /sys/kernel/btf/vmlinux format c > $@
 
 clean:
-	rm -f *.o
-
+	rm -f *.o rootkit vmlinux.h
