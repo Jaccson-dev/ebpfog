@@ -37,8 +37,8 @@ int auditor_entry(struct pt_regs *ctx)
     struct pt_regs *regs = (struct pt_regs *)PT_REGS_PARM1(ctx);
     unsigned long cmd, uattr;
     
-    bpf_probe_read_kernel(&cmd, sizeof(cmd), &regs->di); // Read the first parameter of the syscall 
-    bpf_probe_read_kernel(&uattr, sizeof(uattr), &regs->si); // Read the second parameter of the syscall obviously lmao
+    bpf_probe_read_kernel(&cmd, sizeof(cmd), &regs->di);
+    bpf_probe_read_kernel(&uattr, sizeof(uattr), &regs->si);
     
     if ((int)cmd == BPF_PROG_LOAD) {
         struct event_data *evt = bpf_ringbuf_reserve(&event_ringbuf, sizeof(*evt), 0);
@@ -93,6 +93,18 @@ int changer_exit(struct pt_regs *ctx)
     }
     
     bpf_map_delete_elem(&ctx_map, &pid_tgid);
+    return 0;
+}
+
+// Hook to catch BPF programs unloading using the *somewhat* stable internal function that gets called when a BPF program is unloaded
+SEC("kprobe/bpf_prog_put")
+int detect_unload(struct pt_regs *ctx)
+{
+    struct event_data *evt = bpf_ringbuf_reserve(&event_ringbuf, sizeof(*evt), 0);
+    if (evt) {
+        evt->action = ACTION_UNLOAD;
+        bpf_ringbuf_submit(evt, 0);
+    }
     return 0;
 }
 

